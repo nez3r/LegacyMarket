@@ -27,9 +27,9 @@ all: $(TARGET)
 
 # Правило для сборки исполняемого файла
 $(TARGET): $(SRCS)
-	@if not exist $(OUT_DIR) mkdir $(OUT_DIR)
+	@mkdir -p $(OUT_DIR)
 	$(CXX) $(SRCS) -o $(TARGET) $(CXXFLAGS) $(INCLUDES) $(LDFLAGS) $(LIBS)
 
 # Очистка папки сборки
 clean:
-	if exist $(OUT_DIR) del /q $(OUT_DIR)\*
+	rm -f $(OUT_DIR)/*
