@@ -10,9 +10,15 @@
 #include <string>
 
 #define ID_MENU_CHANGE_REPO 5001
+#define ID_EDIT_REPO 5002
+#define ID_BTN_OK 5003
+#define ID_BTN_CANCEL 5004
 
-HWND hTab, hListBox, hButtonInstall, hButtonUpdate, hStatusText, hInfoBox;
-HFONT hCustomFont;
+HWND hTab, hListBox, hButtonInstall, hButtonUpdate, hStatusText, hInfoBox, hProgressBar;
+HFONT hCustomFont, hTitleFont;
+HBRUSH hBackgroundBrush, hButtonBrush;
+HWND hDialogRepo = NULL;
+HWND hMainWindow = NULL;
 
 struct AppInfo {
     std::wstring id;
@@ -30,6 +36,7 @@ const char* ini_filename = "repolast.ini";
 const char* config_filename = "config.cfg";
 std::string repository_url = "https://raw.githubusercontent.com/nez3r/LegacyMarket/refs/heads/main/apps.ini";
 const std::string official_repo = "https://raw.githubusercontent.com/nez3r/LegacyMarket/refs/heads/main/apps.ini";
+long last_http_code = 0; // Для хранения последнего HTTP кода
 
 // Оставляем вектор пустым. Он заполнится сам из apps.ini!
 std::vector<std::wstring> categories; 
@@ -54,25 +61,54 @@ size_t write_callback(void* ptr, size_t size, size_t nmemb, FILE* stream) {
     return fwrite(ptr, size, nmemb, stream);
 }
 
+int progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
+    if (dltotal > 0 && hProgressBar) {
+        int percent = (int)((dlnow * 100) / dltotal);
+        SendMessageW(hProgressBar, PBM_SETPOS, percent, 0);
+    }
+    return 0;
+}
+
 bool DownloadDatabase() {
     CURL* curl = curl_easy_init();
     if (curl) {
         FILE* fp = fopen(ini_filename, "wb");
-        if (!fp) return false;
+        if (!fp) {
+            last_http_code = 0;
+            return false;
+        }
+
+        // Показываем прогресс-бар
+        if (hProgressBar) {
+            ShowWindow(hProgressBar, SW_SHOW);
+            SendMessageW(hProgressBar, PBM_SETPOS, 0, 0);
+        }
 
         curl_easy_setopt(curl, CURLOPT_URL, repository_url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L); // Таймаут 10 секунд
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 
         CURLcode res = curl_easy_perform(curl);
+
+        // Получаем HTTP код ответа
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &last_http_code);
+
         curl_easy_cleanup(curl);
         fclose(fp);
 
-        return (res == CURLE_OK);
+        // Скрываем прогресс-бар
+        if (hProgressBar) {
+            ShowWindow(hProgressBar, SW_HIDE);
+        }
+
+        return (res == CURLE_OK && last_http_code == 200);
     }
+    last_http_code = 0;
     return false;
 }
 
@@ -109,6 +145,67 @@ void LoadRepositoryUrl() {
 
 bool IsOfficialRepository() {
     return repository_url == official_repo;
+}
+
+LRESULT CALLBACK RepoDialogProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    static HWND hEdit = NULL;
+
+    switch (msg) {
+        case WM_CREATE: {
+            CreateWindowW(L"STATIC", Utf8ToWstring("Введите URL репозитория:").c_str(),
+                WS_CHILD | WS_VISIBLE,
+                10, 10, 480, 20, hwnd, NULL, NULL, NULL);
+
+            std::wstring current_url = Utf8ToWstring(repository_url);
+            hEdit = CreateWindowW(L"EDIT", current_url.c_str(),
+                WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                10, 35, 480, 25, hwnd, (HMENU)ID_EDIT_REPO, NULL, NULL);
+            SendMessageW(hEdit, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
+
+            HWND hBtnOk = CreateWindowW(L"BUTTON", L"OK",
+                WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                300, 75, 90, 30, hwnd, (HMENU)ID_BTN_OK, NULL, NULL);
+            SendMessageW(hBtnOk, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
+
+            HWND hBtnCancel = CreateWindowW(L"BUTTON", Utf8ToWstring("Отмена").c_str(),
+                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                400, 75, 90, 30, hwnd, (HMENU)ID_BTN_CANCEL, NULL, NULL);
+            SendMessageW(hBtnCancel, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
+            break;
+        }
+        case WM_COMMAND: {
+            if (LOWORD(wp) == ID_BTN_OK) {
+                wchar_t buffer[512] = {0};
+                GetWindowTextW(hEdit, buffer, 512);
+                std::wstring new_url_w(buffer);
+
+                // Преобразуем в UTF-8
+                int size_needed = WideCharToMultiByte(CP_UTF8, 0, &new_url_w[0], (int)new_url_w.size(), NULL, 0, NULL, NULL);
+                repository_url.resize(size_needed);
+                WideCharToMultiByte(CP_UTF8, 0, &new_url_w[0], (int)new_url_w.size(), &repository_url[0], size_needed, NULL, NULL);
+
+                SaveRepositoryUrl();
+                DestroyWindow(hwnd);
+
+                // Автоматически обновляем базу данных
+                if (hMainWindow) {
+                    PostMessageW(hMainWindow, WM_COMMAND, MAKEWPARAM(4, 0), 0);
+                }
+            } else if (LOWORD(wp) == ID_BTN_CANCEL) {
+                DestroyWindow(hwnd);
+            }
+            break;
+        }
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            break;
+        case WM_DESTROY:
+            hDialogRepo = NULL;
+            break;
+        default:
+            return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+    return 0;
 }
 
 void ParseDatabase() {
@@ -215,9 +312,15 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
     if (index < 0 || (size_t)index >= appList.size()) return 0;
 
     AppInfo app = appList[index];
-    
+
     EnableWindow(hButtonInstall, FALSE);
     SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Скачивание файла...").c_str());
+
+    // Показываем прогресс-бар для скачивания
+    if (hProgressBar) {
+        ShowWindow(hProgressBar, SW_SHOW);
+        SendMessageW(hProgressBar, PBM_SETPOS, 0, 0);
+    }
 
     std::string url_ansi = WstringToAnsi(app.url);
     std::wstring filename = app.url.substr(app.url.find_last_of(L"/") + 1);
@@ -225,7 +328,7 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
     while ((pos = filename.find(L"%20")) != std::wstring::npos) {
         filename.replace(pos, 3, L" ");
     }
-    
+
     wchar_t temp_path[MAX_PATH];
     GetTempPathW(MAX_PATH, temp_path);
     std::wstring local_path = std::wstring(temp_path) + filename;
@@ -239,13 +342,51 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
             curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
             curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+            curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
+            curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 
             CURLcode res = curl_easy_perform(curl);
             fclose(fp);
 
+            // Скрываем прогресс-бар
+            if (hProgressBar) {
+                ShowWindow(hProgressBar, SW_HIDE);
+            }
+
             if (res == CURLE_OK) {
                 SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Запуск установки...").c_str());
-                ShellExecuteW(NULL, L"open", local_path.c_str(), NULL, NULL, SW_SHOWNORMAL);
+
+                // Запускаем установщик и получаем информацию о процессе
+                SHELLEXECUTEINFOW sei = {0};
+                sei.cbSize = sizeof(sei);
+                sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+                sei.lpVerb = L"open";
+                sei.lpFile = local_path.c_str();
+                sei.nShow = SW_SHOWNORMAL;
+
+                if (ShellExecuteExW(&sei)) {
+                    // Создаём окно "Установка запущена"
+                    HWND hInstallDialog = CreateWindowExW(WS_EX_TOPMOST | WS_EX_DLGMODALFRAME,
+                        L"STATIC", Utf8ToWstring("Установка запущена").c_str(),
+                        WS_POPUP | WS_CAPTION | WS_VISIBLE,
+                        (GetSystemMetrics(SM_CXSCREEN) - 300) / 2,
+                        (GetSystemMetrics(SM_CYSCREEN) - 100) / 2,
+                        300, 100, hMainWindow, NULL, GetModuleHandle(NULL), NULL);
+
+                    HWND hLabel = CreateWindowW(L"STATIC", Utf8ToWstring("Пожалуйста, дождитесь завершения установки...").c_str(),
+                        WS_CHILD | WS_VISIBLE | SS_CENTER,
+                        10, 30, 280, 40, hInstallDialog, NULL, NULL, NULL);
+                    SendMessageW(hLabel, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
+
+                    // Ждём завершения процесса установки
+                    if (sei.hProcess) {
+                        WaitForSingleObject(sei.hProcess, INFINITE);
+                        CloseHandle(sei.hProcess);
+                    }
+
+                    // Закрываем окно "Установка запущена"
+                    DestroyWindow(hInstallDialog);
+                }
             } else {
                 SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Ошибка скачивания!").c_str());
             }
@@ -263,7 +404,12 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_CREATE: {
+            hMainWindow = hwnd;
             InitCommonControls();
+
+            // Создаём кисти для фона
+            hBackgroundBrush = CreateSolidBrush(RGB(240, 240, 245));
+            hButtonBrush = CreateSolidBrush(RGB(0, 120, 215));
 
             // Создаём меню
             HMENU hMenuBar = CreateMenu();
@@ -274,9 +420,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
             SetMenu(hwnd, hMenuBar);
 
-            hCustomFont = CreateFontW(15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            // Создаём шрифты
+            hCustomFont = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                      DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                                      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
+            hTitleFont = CreateFontW(18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
             hTab = CreateWindowW(WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                                  10, 10, 515, 330, hwnd, (HMENU)3, NULL, NULL);
@@ -302,6 +453,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             hStatusText = CreateWindowW(L"STATIC", Utf8ToWstring("Статус: Подключение к репозиторию...").c_str(), WS_CHILD | WS_VISIBLE,
                                         10, 355, 515, 20, hwnd, NULL, NULL, NULL);
             SendMessageW(hStatusText, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
+
+            // Создаём прогресс-бар (скрытый по умолчанию)
+            hProgressBar = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | PBS_SMOOTH,
+                                         10, 380, 515, 20, hwnd, NULL, NULL, NULL);
+            SendMessageW(hProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+            SendMessageW(hProgressBar, PBM_SETPOS, 0, 0);
 
             // Загружаем URL репозитория из конфига
             LoadRepositoryUrl();
@@ -356,7 +513,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 SetWindowTextW(hStatusText, status_msg.c_str());
             } else {
-                SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Ошибка сети! Локальная база не найдена.").c_str());
+                std::string error_msg = "Статус: Ошибка сети";
+                if (last_http_code > 0) {
+                    error_msg += ": HTTP " + std::to_string(last_http_code);
+                } else {
+                    error_msg += ": Ошибка подключения";
+                }
+                error_msg += ". Локальная база не найдена.";
+                SetWindowTextW(hStatusText, Utf8ToWstring(error_msg).c_str());
             }
             break;
         }
@@ -369,67 +533,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_COMMAND: {
             if (LOWORD(wp) == ID_MENU_CHANGE_REPO) {
-                // Диалог для ввода нового URL репозитория
-                wchar_t buffer[512] = {0};
-                std::wstring current_url = Utf8ToWstring(repository_url);
-                wcscpy_s(buffer, 512, current_url.c_str());
+                if (hDialogRepo == NULL) {
+                    // Регистрируем класс окна для диалога
+                    WNDCLASSW wc = {0};
+                    wc.lpfnWndProc = RepoDialogProc;
+                    wc.hInstance = GetModuleHandle(NULL);
+                    wc.lpszClassName = L"RepoDialogClass";
+                    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+                    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+                    RegisterClassW(&wc);
 
-                // Создаём диалоговое окно
-                HWND hDialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"STATIC", Utf8ToWstring("Сменить репозиторий").c_str(),
-                    WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-                    (GetSystemMetrics(SM_CXSCREEN) - 500) / 2,
-                    (GetSystemMetrics(SM_CYSCREEN) - 150) / 2,
-                    500, 150, hwnd, NULL, NULL, NULL);
-
-                CreateWindowW(L"STATIC", Utf8ToWstring("Введите URL репозитория:").c_str(),
-                    WS_CHILD | WS_VISIBLE,
-                    10, 10, 480, 20, hDialog, NULL, NULL, NULL);
-
-                HWND hEdit = CreateWindowW(L"EDIT", buffer,
-                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                    10, 35, 480, 25, hDialog, (HMENU)5002, NULL, NULL);
-                SendMessageW(hEdit, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
-
-                HWND hBtnOk = CreateWindowW(L"BUTTON", L"OK",
-                    WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                    300, 75, 90, 30, hDialog, (HMENU)IDOK, NULL, NULL);
-                SendMessageW(hBtnOk, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
-
-                HWND hBtnCancel = CreateWindowW(L"BUTTON", Utf8ToWstring("Отмена").c_str(),
-                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                    400, 75, 90, 30, hDialog, (HMENU)IDCANCEL, NULL, NULL);
-                SendMessageW(hBtnCancel, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
-
-                // Простой цикл сообщений для диалога
-                MSG msg;
-                bool dialogActive = true;
-                while (dialogActive && GetMessageW(&msg, NULL, 0, 0)) {
-                    if (msg.message == WM_COMMAND) {
-                        if (LOWORD(msg.wParam) == IDOK) {
-                            GetWindowTextW(hEdit, buffer, 512);
-                            std::wstring new_url_w(buffer);
-
-                            // Преобразуем в UTF-8
-                            int size_needed = WideCharToMultiByte(CP_UTF8, 0, &new_url_w[0], (int)new_url_w.size(), NULL, 0, NULL, NULL);
-                            repository_url.resize(size_needed);
-                            WideCharToMultiByte(CP_UTF8, 0, &new_url_w[0], (int)new_url_w.size(), &repository_url[0], size_needed, NULL, NULL);
-
-                            SaveRepositoryUrl();
-                            MessageBoxW(hwnd, Utf8ToWstring("Репозиторий изменён. Нажмите 'Обновить базу' для загрузки.").c_str(),
-                                       Utf8ToWstring("Успех").c_str(), MB_OK | MB_ICONINFORMATION);
-                            dialogActive = false;
-                        } else if (LOWORD(msg.wParam) == IDCANCEL) {
-                            dialogActive = false;
-                        }
-                    }
-                    if (msg.message == WM_CLOSE && msg.hwnd == hDialog) {
-                        dialogActive = false;
-                    }
-                    TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
+                    // Создаём диалоговое окно
+                    hDialogRepo = CreateWindowExW(WS_EX_DLGMODALFRAME, L"RepoDialogClass",
+                        Utf8ToWstring("Сменить репозиторий").c_str(),
+                        WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+                        (GetSystemMetrics(SM_CXSCREEN) - 500) / 2,
+                        (GetSystemMetrics(SM_CYSCREEN) - 150) / 2,
+                        500, 150, hwnd, NULL, GetModuleHandle(NULL), NULL);
                 }
-
-                DestroyWindow(hDialog);
                 break;
             }
             if (LOWORD(wp) == 1 && HIWORD(wp) == LBN_SELCHANGE) {
@@ -475,21 +596,44 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     }
 
                     UpdateListBox();
+
+                    // Пересоздаём информационное окно для сохранения стиля
+                    DestroyWindow(hInfoBox);
+                    hInfoBox = CreateWindowW(L"STATIC", Utf8ToWstring("Выберите программу из списка...").c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER,
+                                            275, 45, 240, 200, hwnd, NULL, NULL, NULL);
+                    SendMessageW(hInfoBox, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
+                    EnableWindow(hButtonInstall, FALSE);
+
                     std::wstring status_msg = Utf8ToWstring("Статус: База успешно обновлена.");
                     if (IsOfficialRepository()) {
                         status_msg += Utf8ToWstring(" [Официальный репозиторий]");
                     }
                     SetWindowTextW(hStatusText, status_msg.c_str());
                 } else {
-                    SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Ошибка обновления!").c_str());
+                    std::string error_msg = "Статус: Ошибка обновления базы";
+                    if (last_http_code > 0) {
+                        error_msg += ": HTTP " + std::to_string(last_http_code);
+                    } else {
+                        error_msg += ": Ошибка подключения";
+                    }
+                    SetWindowTextW(hStatusText, Utf8ToWstring(error_msg).c_str());
                 }
 
                 EnableWindow(hButtonUpdate, TRUE);
             }
             break;
         }
+        case WM_CTLCOLORSTATIC: {
+            HDC hdcStatic = (HDC)wp;
+            SetTextColor(hdcStatic, RGB(50, 50, 50));
+            SetBkColor(hdcStatic, RGB(240, 240, 245));
+            return (INT_PTR)hBackgroundBrush;
+        }
         case WM_DESTROY:
-            DeleteObject(hCustomFont); 
+            DeleteObject(hCustomFont);
+            DeleteObject(hTitleFont);
+            DeleteObject(hBackgroundBrush);
+            DeleteObject(hButtonBrush);
             curl_global_cleanup();
             PostQuitMessage(0);
             break;
@@ -501,7 +645,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR args, int ncmdshow) {
     WNDCLASSW wc = {0};
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); 
+    wc.hbrBackground = CreateSolidBrush(RGB(240, 240, 245));
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hInstance = hInst;
     wc.lpszClassName = L"LegacyMarketTabsClass";
@@ -511,7 +655,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR args, int ncmdsho
 
     HWND hwnd = CreateWindowW(L"LegacyMarketTabsClass", L"Legacy Market Client",
                               WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 550, 420, NULL, NULL, hInst, NULL);
+                              CW_USEDEFAULT, CW_USEDEFAULT, 550, 450, NULL, NULL, hInst, NULL);
 
     ShowWindow(hwnd, ncmdshow);
     UpdateWindow(hwnd);
