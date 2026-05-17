@@ -1,7 +1,28 @@
-#include <curl/curl.h>
-#include <windows.h>
-#include <commctrl.h>
+// 1. Указываем компилятору, что наш таргет — строго Windows XP (0x0501)
+// Это заставит заголовочные файлы скрыть современные объявления
+#define _WIN32_WINNT 0x0501
+#define WINVER 0x0501
 
+// 2. Сначала подключаем сетевую библиотеку, как просит компилятор, затем основную Windows
+#include <winsock2.h>
+#include <windows.h>
+
+// --- УЛЬТИМАТИВНЫЙ ПЕРЕХВАТ GETTICKCOUNT64 ДЛЯ WINDOWS XP ---
+extern "C" {
+    // Перехват прямого вызова функции (GetTickCount64@0)
+    ULONGLONG WINAPI GetTickCount64(VOID) {
+        return (ULONGLONG)GetTickCount();
+    }
+
+    // Перехват вызова через таблицу импорта DLL (_imp__GetTickCount64@0).
+    // Это гарантирует, что вызовы из скомпилированной libcurl.a перенаправятся сюда.
+    typedef ULONGLONG (WINAPI *GetTickCount64_fn)(VOID);
+    GetTickCount64_fn xp_imp_GetTickCount64 __asm__("_imp__GetTickCount64@0") = GetTickCount64;
+}
+// ------------------------------------------------------------
+
+#include <curl/curl.h>
+#include <commctrl.h>
 #include <iostream>
 #include <cstdio>
 #include <vector>
@@ -14,6 +35,7 @@
 #define ID_BTN_OK 5003
 #define ID_BTN_CANCEL 5004
 
+// Переменные интерфейса
 HWND hTab, hListBox, hButtonInstall, hButtonUpdate, hStatusText, hInfoBox, hProgressBar;
 HFONT hCustomFont, hTitleFont;
 HBRUSH hBackgroundBrush, hButtonBrush;

@@ -1,8 +1,8 @@
-# Имя компилятора (убедись, что новый 32-битный MinGW прописан в PATH, либо укажи полный путь, например: C:/mingw32/bin/g++)
-CXX = g++
+# Имя компилятора (точный путь к 32-битному MinGW 11.2)
+CXX = c:/mingw32/bin/g++.exe
 
-# Флаги компилятора (убрали -m32, так как компилятор уже x86)
-CXXFLAGS = -Wall -O2
+# Флаги компилятора
+CXXFLAGS = -Wall -O2 -DCURL_STATICLIB
 
 # Пути к заголовочным файлам Curl
 INCLUDES = -I./curl/include
@@ -10,26 +10,23 @@ INCLUDES = -I./curl/include
 # Пути к библиотекам Curl
 LDFLAGS = -L./curl/lib
 
-# Библиотеки для линковки (включая интерфейс Windows)
-LIBS = -lcurl -lws2_32 -lwldap32 -lcrypt32 -lcomctl32 -mwindows
+# Библиотеки для линковки (ДОБАВЛЕН ФЛАГ --allow-multiple-definition В НАЧАЛО)
+LIBS = -Wl,--allow-multiple-definition -static -lcurl -lngtcp2_crypto_openssl -lngtcp2 -lnghttp3 -lnghttp2 -lssh2 -lssl -lcrypto -lgsasl -lidn2 -lzstd -lbrotlidec -lbrotlicommon -lz -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -lcomctl32 -lshell32 -lgdi32 -luser32 -mwindows
 
 # Папка для готовой сборки
 OUT_DIR = out
 
-# Имя готового исполняемого файла внутри папки out
+# Имя готового исполняемого файла
 TARGET = $(OUT_DIR)/market.exe
 
 # Исходные файлы
 SRCS = main.cpp
 
-# Правило по умолчанию
 all: $(TARGET)
 
-# Правило для сборки исполняемого файла
 $(TARGET): $(SRCS)
-	@mkdir -p $(OUT_DIR)
+	@echo Building in $(OUT_DIR)
 	$(CXX) $(SRCS) -o $(TARGET) $(CXXFLAGS) $(INCLUDES) $(LDFLAGS) $(LIBS)
 
-# Очистка папки сборки
 clean:
 	rm -f $(OUT_DIR)/*
