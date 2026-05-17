@@ -11,7 +11,7 @@ INCLUDES = -I./curl/include
 LDFLAGS = -L./curl/lib
 
 # Библиотеки для линковки (включая интерфейс Windows)
-LIBS = -lcurl -lws2_32 -lwldap32 -lcrypt32 -mwindows
+LIBS = -lcurl -lws2_32 -lwldap32 -lcrypt32 -lcomctl32 -mwindows
 
 # Папка для готовой сборки
 OUT_DIR = out
