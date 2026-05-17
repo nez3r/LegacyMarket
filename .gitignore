@@ -1,0 +1,5 @@
+market.exe
+*.o
+/curl/
+/lib/
+/out/
