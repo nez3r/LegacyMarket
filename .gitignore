@@ -1,4 +1,5 @@
 market.exe
+*.png
 *.o
 /curl/
 /lib/
