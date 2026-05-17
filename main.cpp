@@ -5,6 +5,7 @@
 #include <iostream>
 #include <cstdio>
 #include <vector>
+#include <fstream>
 #include <string>
 
 // Элементы управления
@@ -26,7 +27,7 @@ std::vector<int> filteredIndices; // Индексы приложений, вид
 const char* ini_filename = "apps.ini";
 
 // Список категорий (вкладок)
-std::vector<std::wstring> categories = { L"Все", L"Браузеры", L"Мультимедиа", L"Утилиты", L"Офис" };
+std::vector<std::wstring> categories;
 
 // Конвертеры кодировок
 std::wstring Utf8ToWstring(const std::string& str) {
@@ -66,82 +67,83 @@ bool DownloadDatabase() {
         curl_easy_cleanup(curl);
         fclose(fp);
 
-        if (res == CURLE_OK) {
-            fp = fopen(ini_filename, "rb");
-            if (fp) {
-                fseek(fp, 0, SEEK_END);
-                long size = ftell(fp);
-                fseek(fp, 0, SEEK_SET);
-                std::string utf8_content(size, 0);
-                fread(&utf8_content[0], 1, size, fp);
-                fclose(fp);
-
-                std::wstring wcontent = Utf8ToWstring(utf8_content);
-                std::string ansi_content = WstringToAnsi(wcontent);
-
-                fp = fopen(ini_filename, "wb");
-                if (fp) {
-                    fwrite(ansi_content.c_str(), 1, ansi_content.size(), fp);
-                    fclose(fp);
-                }
-            }
-            return true;
-        }
+        return (res == CURLE_OK);
     }
     return false;
 }
 
 void ParseDatabase() {
     appList.clear();
-    char abs_path[MAX_PATH];
-    GetFullPathNameA(ini_filename, MAX_PATH, abs_path, NULL);
+    categories.clear();
+    
+    std::ifstream file(ini_filename, std::ios::binary);
+    if (!file.is_open()) return;
 
-    // Буфер для названий всех секций (выделяем с запасом на будущее)
-    char section_buffer[8192] = {0};
-    GetPrivateProfileSectionNamesA(section_buffer, sizeof(section_buffer), abs_path);
+    std::string line;
+    AppInfo currentApp;
+    bool hasApp = false;
+    bool inCategoriesSection = false;
 
-    // Перебираем секции (они разделены символом \0, в конце списка \0\0)
-    char* pSection = section_buffer;
-    while (*pSection != '\0') {
-        std::string id = pSection;
+    while (std::getline(file, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == ';') continue;
 
-        char name[256] = {0};
-        char version[50] = {0};
-        char url[512] = {0};
-        char os[256] = {0};
-        char category[100] = {0};
-
-        GetPrivateProfileStringA(id.c_str(), "name", "", name, sizeof(name), abs_path);
-        
-        if (strlen(name) > 0) {
-            GetPrivateProfileStringA(id.c_str(), "version", "0.0", version, sizeof(version), abs_path);
-            GetPrivateProfileStringA(id.c_str(), "url", "", url, sizeof(url), abs_path);
-            GetPrivateProfileStringA(id.c_str(), "os", "Все", os, sizeof(os), abs_path);
-            // Читаем категорию, если её нет в .ini — по умолчанию отправляем в "Утилиты"
-            GetPrivateProfileStringA(id.c_str(), "category", "Утилиты", category, sizeof(category), abs_path);
-
-            AppInfo app;
+        // Фиксируем секции
+        if (line[0] == '[' && line.back() == ']') {
+            std::string sectionName = line.substr(1, line.length() - 2);
             
-            // Для ID и URL используем чистый перевод (без привязки к локали), так как там всегда латиница
-            app.id = std::wstring(id.begin(), id.end());
-            app.url = std::wstring(url, url + strlen(url));
-
-            // Для русского текста (name, os, category) используем конвертер из Windows-1251
-            auto AnsiToWstr = [](const char* ansiStr) {
-                int nw = MultiByteToWideChar(1251, 0, ansiStr, -1, NULL, 0);
-                std::wstring ws(nw - 1, 0);
-                MultiByteToWideChar(1251, 0, ansiStr, -1, &ws[0], nw);
-                return ws;
-            };
-
-            app.name = AnsiToWstr(name);
-            app.version = AnsiToWstr(version);
-            app.os = AnsiToWstr(os);
-            app.category = AnsiToWstr(category);
-
-            appList.push_back(app);
+            if (sectionName == "categories") {
+                inCategoriesSection = true;
+                hasApp = false;
+                continue;
+            }
+            
+            inCategoriesSection = false;
+            if (hasApp) {
+                appList.push_back(currentApp);
+            }
+            
+            currentApp = AppInfo();
+            currentApp.id = std::wstring(sectionName.begin(), sectionName.end());
+            currentApp.category = L"Утилиты"; // Значение по умолчанию
+            currentApp.os = L"Все";
+            hasApp = true;
+            continue;
         }
-        pSection += id.length() + 1; // Переходим к следующей секции в буфере
+
+        // Парсим ключ=значение
+        size_t eq_pos = line.find('=');
+        if (eq_pos != std::string::npos) {
+            std::string key = line.substr(0, eq_pos);
+            std::string val = line.substr(eq_pos + 1);
+            std::wstring wval = Utf8ToWstring(val);
+
+            if (inCategoriesSection) {
+                if (key == "list") {
+                    // Разбиваем строку категорий через запятую
+                    std::wstringstream ss(wval);
+                    std::wstring item;
+                    while (std::getline(ss, item, L',')) {
+                        if (!item.empty()) categories.push_back(item);
+                    }
+                }
+            } else if (hasApp) {
+                if (key == "name") currentApp.name = wval;
+                else if (key == "version") currentApp.version = wval;
+                else if (key == "url") currentApp.url = wval;
+                else if (key == "os") currentApp.os = wval;
+                else if (key == "category") currentApp.category = wval;
+            }
+        }
+    }
+    if (hasApp) {
+        appList.push_back(currentApp);
+    }
+    file.close();
+
+    // Если секции в файле вдруг не оказалось, создаем дефолтную вкладку на английском
+    if (categories.empty()) {
+        categories.push_back(L"Apps");
     }
 }
 
@@ -151,16 +153,16 @@ void UpdateListBox() {
     filteredIndices.clear();
 
     int selTab = TabCtrl_GetCurSel(hTab);
-    std::wstring selCategory = categories[selTab];
+    if (selTab < 0 || (size_t)selTab >= categories.size()) return;
 
     for (size_t i = 0; i < appList.size(); i++) {
-        if (selCategory == L"Все" || appList[i].category == selCategory) {
+        // selTab == 0 означает, что выбрана самая первая вкладка ("Все")
+        if (selTab == 0 || appList[i].category == categories[selTab]) {
             SendMessageW(hListBox, LB_ADDSTRING, 0, (LPARAM)appList[i].name.c_str());
-            filteredIndices.push_back(i); // Запоминаем реальный индекс в общем векторе
+            filteredIndices.push_back(i);
         }
     }
     
-    // Сбрасываем инфо-бокс и кнопку установки
     SetWindowTextW(hInfoBox, L"Выберите программу из списка...");
     EnableWindow(hButtonInstall, FALSE);
 }
@@ -234,13 +236,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                  10, 10, 515, 330, hwnd, (HMENU)3, NULL, NULL);
             SendMessageW(hTab, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
 
-            // Заполняем вкладки названиями категорий
-            TCITEMW tie;
-            tie.mask = TCIF_TEXT;
-            for (size_t i = 0; i < categories.size(); i++) {
-                tie.pszText = (LPWSTR)categories[i].c_str();
-                TabCtrl_InsertItemW(hTab, i, &tie);
-            }
 
             // 2. Создаем ListBox внутри области вкладок
             hListBox = CreateWindowW(L"LISTBOX", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | LBS_NOTIFY | WS_VSCROLL,
@@ -263,11 +258,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                         10, 355, 515, 20, hwnd, NULL, NULL, NULL);
             SendMessageW(hStatusText, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
 
-            // Загрузка данных
             curl_global_init(CURL_GLOBAL_ALL);
             if (DownloadDatabase()) {
                 ParseDatabase();
-                UpdateListBox(); // Отобразит приложения для первой вкладки "Все"
+                
+                // Динамически создаем вкладки на основе загруженного и декодированного UTF-8
+                TabCtrl_DeleteAllItems(hTab);
+                TCITEMW tie;
+                tie.mask = TCIF_TEXT;
+                for (size_t i = 0; i < categories.size(); i++) {
+                    tie.pszText = (LPWSTR)categories[i].c_str();
+                    TabCtrl_InsertItem(hTab, i, &tie);
+                }
+
+                UpdateListBox(); // Отобразит приложения для первой вкладки
                 SetWindowTextW(hStatusText, L"Статус: Репозиторий успешно подключен.");
             } else {
                 SetWindowTextW(hStatusText, L"Статус: Ошибка сети при чтении репозитория!");
