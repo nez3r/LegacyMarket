@@ -1,35 +1,33 @@
-#include <curl/curl.h>  // Сначала CURL
-#include <windows.h>    // Затем Windows
-#include <commctrl.h>   // Поддержка вкладок (Tab Control)
+#include <curl/curl.h>
+#include <windows.h>
+#include <commctrl.h>
 
 #include <iostream>
 #include <cstdio>
 #include <vector>
 #include <fstream>
+#include <sstream>
 #include <string>
 
-// Элементы управления
 HWND hTab, hListBox, hButtonInstall, hStatusText, hInfoBox;
-HFONT hCustomFont; // Хэндл для красивого шрифта
+HFONT hCustomFont;
 
-// Структура приложения
 struct AppInfo {
     std::wstring id;
     std::wstring name;
     std::wstring version;
     std::wstring url;
     std::wstring os;
-    std::wstring category; // Новое поле для вкладок
+    std::wstring category;
 };
 
 std::vector<AppInfo> appList;
-std::vector<int> filteredIndices; // Индексы приложений, видимых в текущей вкладке
+std::vector<int> filteredIndices;
 const char* ini_filename = "apps.ini";
 
-// Список категорий (вкладок)
-std::vector<std::wstring> categories;
+// Оставляем вектор пустым. Он заполнится сам из apps.ini!
+std::vector<std::wstring> categories; 
 
-// Конвертеры кодировок
 std::wstring Utf8ToWstring(const std::string& str) {
     if (str.empty()) return L"";
     int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
@@ -50,7 +48,6 @@ size_t write_callback(void* ptr, size_t size, size_t nmemb, FILE* stream) {
     return fwrite(ptr, size, nmemb, stream);
 }
 
-// Загрузка базы данных
 bool DownloadDatabase() {
     CURL* curl = curl_easy_init();
     if (curl) {
@@ -88,7 +85,6 @@ void ParseDatabase() {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty() || line[0] == ';') continue;
 
-        // Фиксируем секции
         if (line[0] == '[' && line.back() == ']') {
             std::string sectionName = line.substr(1, line.length() - 2);
             
@@ -99,19 +95,16 @@ void ParseDatabase() {
             }
             
             inCategoriesSection = false;
-            if (hasApp) {
-                appList.push_back(currentApp);
-            }
+            if (hasApp) appList.push_back(currentApp);
             
             currentApp = AppInfo();
             currentApp.id = std::wstring(sectionName.begin(), sectionName.end());
-            currentApp.category = L"Утилиты"; // Значение по умолчанию
-            currentApp.os = L"Все";
+            currentApp.category = Utf8ToWstring("Утилиты"); 
+            currentApp.os = Utf8ToWstring("Все");
             hasApp = true;
             continue;
         }
 
-        // Парсим ключ=значение
         size_t eq_pos = line.find('=');
         if (eq_pos != std::string::npos) {
             std::string key = line.substr(0, eq_pos);
@@ -120,7 +113,6 @@ void ParseDatabase() {
 
             if (inCategoriesSection) {
                 if (key == "list") {
-                    // Разбиваем строку категорий через запятую
                     std::wstringstream ss(wval);
                     std::wstring item;
                     while (std::getline(ss, item, L',')) {
@@ -136,18 +128,12 @@ void ParseDatabase() {
             }
         }
     }
-    if (hasApp) {
-        appList.push_back(currentApp);
-    }
+    if (hasApp) appList.push_back(currentApp);
     file.close();
 
-    // Если секции в файле вдруг не оказалось, создаем дефолтную вкладку на английском
-    if (categories.empty()) {
-        categories.push_back(L"Apps");
-    }
+    if (categories.empty()) categories.push_back(L"Apps");
 }
 
-// Функция обновления списка в зависимости от выбранной вкладки
 void UpdateListBox() {
     SendMessageW(hListBox, LB_RESETCONTENT, 0, 0);
     filteredIndices.clear();
@@ -156,18 +142,17 @@ void UpdateListBox() {
     if (selTab < 0 || (size_t)selTab >= categories.size()) return;
 
     for (size_t i = 0; i < appList.size(); i++) {
-        // selTab == 0 означает, что выбрана самая первая вкладка ("Все")
+        // selTab == 0 отвечает за первую вкладку "Все"
         if (selTab == 0 || appList[i].category == categories[selTab]) {
             SendMessageW(hListBox, LB_ADDSTRING, 0, (LPARAM)appList[i].name.c_str());
             filteredIndices.push_back(i);
         }
     }
     
-    SetWindowTextW(hInfoBox, L"Выберите программу из списка...");
+    SetWindowTextW(hInfoBox, Utf8ToWstring("Выберите программу из списка...").c_str());
     EnableWindow(hButtonInstall, FALSE);
 }
 
-// Улучшенная функция: Качает во временную папку Temp и запускает
 DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
     int index = (int)(INT_PTR)lpParam;
     if (index < 0 || (size_t)index >= appList.size()) return 0;
@@ -175,7 +160,7 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
     AppInfo app = appList[index];
     
     EnableWindow(hButtonInstall, FALSE);
-    SetWindowTextW(hStatusText, L"Статус: Скачивание файла во временную папку...");
+    SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Скачивание файла...").c_str());
 
     std::string url_ansi = WstringToAnsi(app.url);
     std::wstring filename = app.url.substr(app.url.find_last_of(L"/") + 1);
@@ -184,7 +169,6 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
         filename.replace(pos, 3, L" ");
     }
     
-    // Получаем путь к системной папке Temp
     wchar_t temp_path[MAX_PATH];
     GetTempPathW(MAX_PATH, temp_path);
     std::wstring local_path = std::wstring(temp_path) + filename;
@@ -203,66 +187,57 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
             fclose(fp);
 
             if (res == CURLE_OK) {
-                SetWindowTextW(hStatusText, L"Статус: Запуск установки...");
+                SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Запуск установки...").c_str());
                 ShellExecuteW(NULL, L"open", local_path.c_str(), NULL, NULL, SW_SHOWNORMAL);
             } else {
-                SetWindowTextW(hStatusText, L"Статус: Ошибка скачивания!");
+                SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Ошибка скачивания!").c_str());
             }
         } else {
-            SetWindowTextW(hStatusText, L"Статус: Ошибка создания временного файла!");
+            SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Ошибка сохранения!").c_str());
         }
         curl_easy_cleanup(curl);
     }
 
     EnableWindow(hButtonInstall, TRUE);
-    SetWindowTextW(hStatusText, L"Статус: Готово");
+    SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Готово").c_str());
     return 0;
 }
 
-// Обработчик событий окна
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_CREATE: {
-            // Инициализация общих элементов управления (нужно для вкладок)
             InitCommonControls();
-
-            // Создаем красивый системный шрифт (Tahoma) вместо стандартного топорного
             hCustomFont = CreateFontW(15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, 
                                       RUSSIAN_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, 
                                       DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Tahoma");
 
-            // 1. Создаем Вкладки (Tab Control)
             hTab = CreateWindowW(WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                                  10, 10, 515, 330, hwnd, (HMENU)3, NULL, NULL);
             SendMessageW(hTab, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
 
-
-            // 2. Создаем ListBox внутри области вкладок
             hListBox = CreateWindowW(L"LISTBOX", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | LBS_NOTIFY | WS_VSCROLL,
                                      20, 45, 240, 280, hwnd, (HMENU)1, NULL, NULL);
             SendMessageW(hListBox, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
 
-            // 3. Создаем поле описания (InfoBox)
-            hInfoBox = CreateWindowW(L"STATIC", L"Выберите программу из списка...", WS_CHILD | WS_VISIBLE | WS_BORDER,
+            hInfoBox = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | WS_BORDER,
                                     275, 45, 240, 200, hwnd, NULL, NULL, NULL);
             SendMessageW(hInfoBox, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
 
-            // 4. Создаем кнопку Установить
-            hButtonInstall = CreateWindowW(L"BUTTON", L"Установить программу", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+            hButtonInstall = CreateWindowW(L"BUTTON", Utf8ToWstring("Установить программу").c_str(), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                                            275, 255, 240, 40, hwnd, (HMENU)2, NULL, NULL);
             SendMessageW(hButtonInstall, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
             EnableWindow(hButtonInstall, FALSE);
 
-            // 5. Строка статуса
-            hStatusText = CreateWindowW(L"STATIC", L"Статус: Подключение к репозиторию...", WS_CHILD | WS_VISIBLE,
+            hStatusText = CreateWindowW(L"STATIC", Utf8ToWstring("Статус: Подключение к репозиторию...").c_str(), WS_CHILD | WS_VISIBLE,
                                         10, 355, 515, 20, hwnd, NULL, NULL, NULL);
             SendMessageW(hStatusText, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
 
+            // Динамическая загрузка данных
             curl_global_init(CURL_GLOBAL_ALL);
             if (DownloadDatabase()) {
                 ParseDatabase();
-                
-                // Динамически создаем вкладки на основе загруженного и декодированного UTF-8
+
+                // ВАЖНО: Вкладки создаются только ЗДЕСЬ, после парсинга файла!
                 TabCtrl_DeleteAllItems(hTab);
                 TCITEMW tie;
                 tie.mask = TCIF_TEXT;
@@ -271,40 +246,36 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     TabCtrl_InsertItem(hTab, i, &tie);
                 }
 
-                UpdateListBox(); // Отобразит приложения для первой вкладки
-                SetWindowTextW(hStatusText, L"Статус: Репозиторий успешно подключен.");
+                UpdateListBox(); 
+                SetWindowTextW(hStatusText, Utf8ToWstring("Статус: База успешно загружена.").c_str());
             } else {
-                SetWindowTextW(hStatusText, L"Статус: Ошибка сети при чтении репозитория!");
+                SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Ошибка сети!").c_str());
             }
             break;
         }
         case WM_NOTIFY: {
-            // Переключение вкладок
             LPNMHDR lpnmhdr = (LPNMHDR)lp;
             if (lpnmhdr->hwndFrom == hTab && lpnmhdr->code == TCN_SELCHANGE) {
-                UpdateListBox(); // Перерисовываем список под выбранную категорию
+                UpdateListBox(); 
             }
             break;
         }
         case WM_COMMAND: {
-            // Клик по элементу списка
             if (LOWORD(wp) == 1 && HIWORD(wp) == LBN_SELCHANGE) {
                 int index = SendMessageW(hListBox, LB_GETCURSEL, 0, 0);
                 if (index != LB_ERR) {
-                    int realIndex = filteredIndices[index]; // Достаем реальный ID
+                    int realIndex = filteredIndices[index]; 
                     AppInfo app = appList[realIndex];
                     
-                    std::wstring info = L" Название: " + app.name + L"\n" +
-                                        L" Версия: " + app.version + L"\n" +
-                                        L" Платформа: " + app.os + L"\n" +
-                                        L" Категория: " + app.category + L"\n\n" +
-                                        L" Статус: Готов к установке.\n" +
-                                        L" Файл будет очищен после запуска.";
+                    std::wstring info = Utf8ToWstring(" Название: ") + app.name + L"\n" +
+                                        Utf8ToWstring(" Версия: ") + app.version + L"\n" +
+                                        Utf8ToWstring(" Платформа: ") + app.os + L"\n" +
+                                        Utf8ToWstring(" Категория: ") + app.category + L"\n\n" +
+                                        Utf8ToWstring(" Статус: Готов к установке.\n Файл будет очищен после запуска.");
                     SetWindowTextW(hInfoBox, info.c_str());
                     EnableWindow(hButtonInstall, TRUE);
                 }
             }
-            // Нажатие кнопки Установить
             if (LOWORD(wp) == 2) {
                 int index = SendMessageW(hListBox, LB_GETCURSEL, 0, 0);
                 if (index != LB_ERR) {
@@ -315,7 +286,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         }
         case WM_DESTROY:
-            DeleteObject(hCustomFont); // Удаляем шрифт из памяти
+            DeleteObject(hCustomFont); 
             curl_global_cleanup();
             PostQuitMessage(0);
             break;
@@ -327,7 +298,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR args, int ncmdshow) {
     WNDCLASSW wc = {0};
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); // Цвет фона как у стандартных окон Windows
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); 
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hInstance = hInst;
     wc.lpszClassName = L"LegacyMarketTabsClass";
@@ -335,8 +306,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR args, int ncmdsho
 
     if (!RegisterClassW(&wc)) return -1;
 
-    // Слегка увеличили высоту окна под новые элементы
-    HWND hwnd = CreateWindowW(L"LegacyMarketTabsClass", L"Legacy Market Client v1.1",
+    HWND hwnd = CreateWindowW(L"LegacyMarketTabsClass", L"Legacy Market Client",
                               WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
                               CW_USEDEFAULT, CW_USEDEFAULT, 550, 420, NULL, NULL, hInst, NULL);
 
