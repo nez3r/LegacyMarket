@@ -2,7 +2,8 @@
 CXX = c:/mingw32/bin/g++.exe
 
 # Флаги компилятора
-CXXFLAGS = -Wall -O2 -DCURL_STATICLIB
+CXXFLAGS = -Wall -O2 -DCURL_STATICLIB -D_WIN32_WINNT=0x0501
+CFLAGS = -Wall -O2 -D_WIN32_WINNT=0x0501
 
 # Пути к заголовочным файлам Curl
 INCLUDES = -I./curl/include
@@ -11,8 +12,7 @@ INCLUDES = -I./curl/include
 LDFLAGS = -L./curl/lib
 
 # Библиотеки для линковки (ДОБАВЛЕН ФЛАГ --allow-multiple-definition В НАЧАЛО)
-LIBS = -Wl,--allow-multiple-definition -static -lcurl -lngtcp2_crypto_openssl -lngtcp2 -lnghttp3 -lnghttp2 -lssh2 -lssl -lcrypto -lgsasl -lidn2 -lzstd -lbrotlidec -lbrotlicommon -lz -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -lcomctl32 -lshell32 -lgdi32 -luser32 -mwindows
-
+LIBS = -Wl,--allow-multiple-definition -Wl,--subsystem,windows:5.01 -static -lcurl -lngtcp2_crypto_openssl -lngtcp2 -lnghttp3 -lnghttp2 -lssh2 -lssl -lcrypto -lgsasl -lidn2 -lzstd -lbrotlidec -lbrotlicommon -lz -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -lcomctl32 -lshell32 -lgdi32 -luser32 -mwindows
 # Папка для готовой сборки
 OUT_DIR = out
 
@@ -20,13 +20,13 @@ OUT_DIR = out
 TARGET = $(OUT_DIR)/market.exe
 
 # Исходные файлы
-SRCS = main.cpp
+SRCS = main.cpp xp_compat.c
 
 all: $(TARGET)
 
 $(TARGET): $(SRCS)
 	@echo Building in $(OUT_DIR)
-	$(CXX) $(SRCS) -o $(TARGET) $(CXXFLAGS) $(INCLUDES) $(LDFLAGS) $(LIBS)
+	$(CXX) main.cpp xp_compat.c -o $(TARGET) $(CXXFLAGS) $(INCLUDES) $(LDFLAGS) $(LIBS)
 
 clean:
-	rm -f $(OUT_DIR)/*
+	rm -f $(OUT_DIR)/market.exe
