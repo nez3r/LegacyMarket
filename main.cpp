@@ -1,7 +1,6 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <commctrl.h>
-#include <curl/curl.h>
 
 #include <iostream>
 #include <cstdio>
@@ -9,9 +8,6 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-
-// Подключаем модуль совместимости с Windows XP
-extern "C" void InitXPCompat(void);
 
 #define ID_MENU_CHANGE_REPO 5001
 #define ID_EDIT_REPO 5002
@@ -61,57 +57,32 @@ std::string WstringToAnsi(const std::wstring& wstr) {
     return strTo;
 }
 
-size_t write_callback(void* ptr, size_t size, size_t nmemb, FILE* stream) {
-    return fwrite(ptr, size, nmemb, stream);
-}
-
-int progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
-    if (dltotal > 0 && hProgressBar) {
-        int percent = (int)((dlnow * 100) / dltotal);
-        SendMessageW(hProgressBar, PBM_SETPOS, percent, 0);
-    }
-    return 0;
-}
-
 bool DownloadDatabase() {
-    CURL* curl = curl_easy_init();
-    if (curl) {
-        FILE* fp = fopen(ini_filename, "wb");
-        if (!fp) {
-            last_http_code = 0;
-            return false;
-        }
+    // Используем curl.exe вместо libcurl
+    std::string cmd = "curl.exe -k -L --max-time 10 -o \"" + std::string(ini_filename) + "\" \"" + repository_url + "\" 2>nul";
 
-        // Показываем прогресс-бар
-        if (hProgressBar) {
-            ShowWindow(hProgressBar, SW_SHOW);
-            SendMessageW(hProgressBar, PBM_SETPOS, 0, 0);
-        }
-
-        curl_easy_setopt(curl, CURLOPT_URL, repository_url.c_str());
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
-        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-
-        CURLcode res = curl_easy_perform(curl);
-
-        // Получаем HTTP код ответа
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &last_http_code);
-
-        curl_easy_cleanup(curl);
-        fclose(fp);
-
-        // Скрываем прогресс-бар
-        if (hProgressBar) {
-            ShowWindow(hProgressBar, SW_HIDE);
-        }
-
-        return (res == CURLE_OK && last_http_code == 200);
+    // Показываем прогресс-бар
+    if (hProgressBar) {
+        ShowWindow(hProgressBar, SW_SHOW);
+        SendMessageW(hProgressBar, PBM_SETPOS, 50, 0); // Показываем 50% во время загрузки
     }
+
+    int result = system(cmd.c_str());
+
+    // Скрываем прогресс-бар
+    if (hProgressBar) {
+        ShowWindow(hProgressBar, SW_HIDE);
+    }
+
+    // Проверяем, что файл создан и не пустой
+    std::ifstream test(ini_filename, std::ios::binary | std::ios::ate);
+    if (test.good()) {
+        std::streamsize size = test.tellg();
+        test.close();
+        last_http_code = (result == 0 && size > 0) ? 200 : 0;
+        return (result == 0 && size > 0);
+    }
+
     last_http_code = 0;
     return false;
 }
@@ -323,7 +294,7 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
     // Показываем прогресс-бар для скачивания
     if (hProgressBar) {
         ShowWindow(hProgressBar, SW_SHOW);
-        SendMessageW(hProgressBar, PBM_SETPOS, 0, 0);
+        SendMessageW(hProgressBar, PBM_SETPOS, 50, 0);
     }
 
     std::string url_ansi = WstringToAnsi(app.url);
@@ -337,67 +308,54 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
     GetTempPathW(MAX_PATH, temp_path);
     std::wstring local_path = std::wstring(temp_path) + filename;
 
-    CURL* curl = curl_easy_init();
-    if (curl) {
-        FILE* fp = _wfopen(local_path.c_str(), L"wb");
-        if (fp) {
-            curl_easy_setopt(curl, CURLOPT_URL, url_ansi.c_str());
-            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-            curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
-            curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    // Конвертируем путь в ANSI для curl
+    std::string local_path_ansi = WstringToAnsi(local_path);
 
-            CURLcode res = curl_easy_perform(curl);
-            fclose(fp);
+    // Используем curl.exe для загрузки
+    std::string cmd = "curl.exe -k -L --max-time 300 -o \"" + local_path_ansi + "\" \"" + url_ansi + "\" 2>nul";
+    int result = system(cmd.c_str());
 
-            // Скрываем прогресс-бар
-            if (hProgressBar) {
-                ShowWindow(hProgressBar, SW_HIDE);
+    // Скрываем прогресс-бар
+    if (hProgressBar) {
+        ShowWindow(hProgressBar, SW_HIDE);
+    }
+
+    if (result == 0) {
+        SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Запуск установки...").c_str());
+
+        // Запускаем установщик и получаем информацию о процессе
+        SHELLEXECUTEINFOW sei = {0};
+        sei.cbSize = sizeof(sei);
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+        sei.lpVerb = L"open";
+        sei.lpFile = local_path.c_str();
+        sei.nShow = SW_SHOWNORMAL;
+
+        if (ShellExecuteExW(&sei)) {
+            // Создаём окно "Установка запущена"
+            HWND hInstallDialog = CreateWindowExW(WS_EX_TOPMOST | WS_EX_DLGMODALFRAME,
+                L"STATIC", Utf8ToWstring("Установка запущена").c_str(),
+                WS_POPUP | WS_CAPTION | WS_VISIBLE,
+                (GetSystemMetrics(SM_CXSCREEN) - 300) / 2,
+                (GetSystemMetrics(SM_CYSCREEN) - 100) / 2,
+                300, 100, hMainWindow, NULL, GetModuleHandle(NULL), NULL);
+
+            HWND hLabel = CreateWindowW(L"STATIC", Utf8ToWstring("Пожалуйста, дождитесь завершения установки...").c_str(),
+                WS_CHILD | WS_VISIBLE | SS_CENTER,
+                10, 30, 280, 40, hInstallDialog, NULL, NULL, NULL);
+            SendMessageW(hLabel, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
+
+            // Ждём завершения процесса установки
+            if (sei.hProcess) {
+                WaitForSingleObject(sei.hProcess, INFINITE);
+                CloseHandle(sei.hProcess);
             }
 
-            if (res == CURLE_OK) {
-                SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Запуск установки...").c_str());
-
-                // Запускаем установщик и получаем информацию о процессе
-                SHELLEXECUTEINFOW sei = {0};
-                sei.cbSize = sizeof(sei);
-                sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-                sei.lpVerb = L"open";
-                sei.lpFile = local_path.c_str();
-                sei.nShow = SW_SHOWNORMAL;
-
-                if (ShellExecuteExW(&sei)) {
-                    // Создаём окно "Установка запущена"
-                    HWND hInstallDialog = CreateWindowExW(WS_EX_TOPMOST | WS_EX_DLGMODALFRAME,
-                        L"STATIC", Utf8ToWstring("Установка запущена").c_str(),
-                        WS_POPUP | WS_CAPTION | WS_VISIBLE,
-                        (GetSystemMetrics(SM_CXSCREEN) - 300) / 2,
-                        (GetSystemMetrics(SM_CYSCREEN) - 100) / 2,
-                        300, 100, hMainWindow, NULL, GetModuleHandle(NULL), NULL);
-
-                    HWND hLabel = CreateWindowW(L"STATIC", Utf8ToWstring("Пожалуйста, дождитесь завершения установки...").c_str(),
-                        WS_CHILD | WS_VISIBLE | SS_CENTER,
-                        10, 30, 280, 40, hInstallDialog, NULL, NULL, NULL);
-                    SendMessageW(hLabel, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
-
-                    // Ждём завершения процесса установки
-                    if (sei.hProcess) {
-                        WaitForSingleObject(sei.hProcess, INFINITE);
-                        CloseHandle(sei.hProcess);
-                    }
-
-                    // Закрываем окно "Установка запущена"
-                    DestroyWindow(hInstallDialog);
-                }
-            } else {
-                SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Ошибка скачивания!").c_str());
-            }
-        } else {
-            SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Ошибка сохранения!").c_str());
+            // Закрываем окно "Установка запущена"
+            DestroyWindow(hInstallDialog);
         }
-        curl_easy_cleanup(curl);
+    } else {
+        SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Ошибка скачивания!").c_str());
     }
 
     EnableWindow(hButtonInstall, TRUE);
@@ -468,7 +426,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             LoadRepositoryUrl();
 
             // Динамическая загрузка данных
-            curl_global_init(CURL_GLOBAL_ALL);
             bool downloaded = DownloadDatabase();
 
             if (downloaded) {
@@ -638,7 +595,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             DeleteObject(hTitleFont);
             DeleteObject(hBackgroundBrush);
             DeleteObject(hButtonBrush);
-            curl_global_cleanup();
             PostQuitMessage(0);
             break;
         default:
@@ -648,9 +604,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR args, int ncmdshow) {
-    // КРИТИЧЕСКИ ВАЖНО: Инициализируем перехват GetProcAddress ДО любых вызовов cURL!
-    InitXPCompat();
-
     WNDCLASSW wc = {0};
     wc.hbrBackground = CreateSolidBrush(RGB(240, 240, 245));
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
