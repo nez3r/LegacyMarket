@@ -10,6 +10,9 @@
 #include <sstream>
 #include <string>
 
+// Подключаем модуль совместимости с Windows XP
+extern "C" void InitXPCompat(void);
+
 #define ID_MENU_CHANGE_REPO 5001
 #define ID_EDIT_REPO 5002
 #define ID_BTN_OK 5003
@@ -645,6 +648,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR args, int ncmdshow) {
+    // КРИТИЧЕСКИ ВАЖНО: Инициализируем перехват GetProcAddress ДО любых вызовов cURL!
+    InitXPCompat();
+
     WNDCLASSW wc = {0};
     wc.hbrBackground = CreateSolidBrush(RGB(240, 240, 245));
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
