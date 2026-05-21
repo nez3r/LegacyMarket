@@ -301,6 +301,9 @@ DWORD WINAPI UpdateDatabaseThread(LPVOID lpParam) {
     if (DownloadDatabase()) {
         ParseDatabase();
         PostMessageW(hwnd, WM_USER + 2, 1, 0); // 1 = успешное обновление
+    } else if (LoadLocalDatabase()) {
+        ParseDatabase();
+        PostMessageW(hwnd, WM_USER + 2, 2, 0); // 2 = используется локальная база
     } else {
         PostMessageW(hwnd, WM_USER + 2, 0, 0); // 0 = ошибка
     }
@@ -564,8 +567,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // Сообщение от UpdateDatabaseThread
             int result = (int)wp;
 
-            if (result == 1) {
-                // Успешное обновление
+            if (result == 1 || result == 2) {
+                // Успешное обновление или локальная база
                 TabCtrl_DeleteAllItems(hTab);
                 tabStrings.clear();
 
@@ -587,7 +590,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 SendMessageW(hInfoBox, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
                 EnableWindow(hButtonInstall, FALSE);
 
-                std::wstring status_msg = Utf8ToWstring("Статус: База успешно обновлена.");
+                std::wstring status_msg;
+                if (result == 1) {
+                    status_msg = Utf8ToWstring("Статус: База успешно обновлена.");
+                } else {
+                    status_msg = Utf8ToWstring("Статус: Не удалось обновить. Используется локальная база.");
+                }
+
                 if (IsOfficialRepository()) {
                     status_msg += Utf8ToWstring(" [Официальный репозиторий]");
                 }
@@ -600,6 +609,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 } else {
                     error_msg += ": Ошибка подключения";
                 }
+                error_msg += ". Локальная база не найдена.";
                 SetWindowTextW(hStatusText, Utf8ToWstring(error_msg).c_str());
             }
 
