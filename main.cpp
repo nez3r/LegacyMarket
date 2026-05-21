@@ -273,6 +273,41 @@ void UpdateListBox() {
     EnableWindow(hButtonInstall, FALSE);
 }
 
+// Поток для начальной загрузки базы данных
+DWORD WINAPI InitialDatabaseLoadThread(LPVOID lpParam) {
+    HWND hwnd = (HWND)lpParam;
+
+    bool downloaded = DownloadDatabase();
+
+    if (downloaded) {
+        ParseDatabase();
+
+        // Обновляем UI в главном потоке через PostMessage
+        PostMessageW(hwnd, WM_USER + 1, 1, 0); // 1 = успешная загрузка
+    } else if (LoadLocalDatabase()) {
+        ParseDatabase();
+        PostMessageW(hwnd, WM_USER + 1, 2, 0); // 2 = локальная база
+    } else {
+        PostMessageW(hwnd, WM_USER + 1, 0, 0); // 0 = ошибка
+    }
+
+    return 0;
+}
+
+// Поток для обновления базы данных
+DWORD WINAPI UpdateDatabaseThread(LPVOID lpParam) {
+    HWND hwnd = (HWND)lpParam;
+
+    if (DownloadDatabase()) {
+        ParseDatabase();
+        PostMessageW(hwnd, WM_USER + 2, 1, 0); // 1 = успешное обновление
+    } else {
+        PostMessageW(hwnd, WM_USER + 2, 0, 0); // 0 = ошибка
+    }
+
+    return 0;
+}
+
 DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
     int index = (int)(INT_PTR)lpParam;
     if (index < 0 || (size_t)index >= appList.size()) return 0;
@@ -415,64 +450,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // Загружаем URL репозитория из конфига
             LoadRepositoryUrl();
 
-            // Динамическая загрузка данных
-            bool downloaded = DownloadDatabase();
-
-            if (downloaded) {
-                ParseDatabase();
-
-                // ВАЖНО: Вкладки создаются только ЗДЕСЬ, после парсинга файла!
-                TabCtrl_DeleteAllItems(hTab);
-                tabStrings.clear();
-
-                TCITEMW tie;
-                tie.mask = TCIF_TEXT;
-
-                // Сохраняем строки для вкладок и используем SendMessageW
-                for (size_t i = 0; i < categories.size(); i++) {
-                    tabStrings.push_back(categories[i]);
-                    tie.pszText = (LPWSTR)tabStrings[i].c_str();
-                    SendMessageW(hTab, TCM_INSERTITEMW, i, (LPARAM)&tie);
-                }
-
-                UpdateListBox();
-                std::wstring status_msg = Utf8ToWstring("Статус: База успешно загружена.");
-                if (IsOfficialRepository()) {
-                    status_msg += Utf8ToWstring(" [Официальный репозиторий]");
-                }
-                SetWindowTextW(hStatusText, status_msg.c_str());
-            } else if (LoadLocalDatabase()) {
-                // Если не удалось скачать, используем локальную версию
-                ParseDatabase();
-
-                TabCtrl_DeleteAllItems(hTab);
-                tabStrings.clear();
-
-                TCITEMW tie;
-                tie.mask = TCIF_TEXT;
-
-                for (size_t i = 0; i < categories.size(); i++) {
-                    tabStrings.push_back(categories[i]);
-                    tie.pszText = (LPWSTR)tabStrings[i].c_str();
-                    SendMessageW(hTab, TCM_INSERTITEMW, i, (LPARAM)&tie);
-                }
-
-                UpdateListBox();
-                std::wstring status_msg = Utf8ToWstring("Статус: Используется локальная база данных.");
-                if (IsOfficialRepository()) {
-                    status_msg += Utf8ToWstring(" [Официальный репозиторий]");
-                }
-                SetWindowTextW(hStatusText, status_msg.c_str());
-            } else {
-                std::string error_msg = "Статус: Ошибка сети";
-                if (last_http_code > 0) {
-                    error_msg += ": HTTP " + std::to_string(last_http_code);
-                } else {
-                    error_msg += ": Ошибка подключения";
-                }
-                error_msg += ". Локальная база не найдена.";
-                SetWindowTextW(hStatusText, Utf8ToWstring(error_msg).c_str());
-            }
+            // Запускаем загрузку базы данных в отдельном потоке
+            SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Подключение к репозиторию...").c_str());
+            CreateThread(NULL, 0, InitialDatabaseLoadThread, (LPVOID)hwnd, 0, NULL);
             break;
         }
         case WM_NOTIFY: {
@@ -531,47 +511,99 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Обновление базы данных...").c_str());
                 EnableWindow(hButtonUpdate, FALSE);
 
-                if (DownloadDatabase()) {
-                    ParseDatabase();
+                // Запускаем обновление в отдельном потоке
+                CreateThread(NULL, 0, UpdateDatabaseThread, (LPVOID)hwnd, 0, NULL);
+            }
+            break;
+        }
+        case WM_USER + 1: {
+            // Сообщение от InitialDatabaseLoadThread
+            int result = (int)wp;
 
-                    TabCtrl_DeleteAllItems(hTab);
-                    tabStrings.clear();
+            if (result == 1 || result == 2) {
+                // Успешная загрузка или локальная база
+                TabCtrl_DeleteAllItems(hTab);
+                tabStrings.clear();
 
-                    TCITEMW tie;
-                    tie.mask = TCIF_TEXT;
+                TCITEMW tie;
+                tie.mask = TCIF_TEXT;
 
-                    for (size_t i = 0; i < categories.size(); i++) {
-                        tabStrings.push_back(categories[i]);
-                        tie.pszText = (LPWSTR)tabStrings[i].c_str();
-                        SendMessageW(hTab, TCM_INSERTITEMW, i, (LPARAM)&tie);
-                    }
-
-                    UpdateListBox();
-
-                    // Пересоздаём информационное окно для сохранения стиля
-                    DestroyWindow(hInfoBox);
-                    hInfoBox = CreateWindowW(L"STATIC", Utf8ToWstring("Выберите программу из списка...").c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER,
-                                            275, 45, 240, 200, hwnd, NULL, NULL, NULL);
-                    SendMessageW(hInfoBox, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
-                    EnableWindow(hButtonInstall, FALSE);
-
-                    std::wstring status_msg = Utf8ToWstring("Статус: База успешно обновлена.");
-                    if (IsOfficialRepository()) {
-                        status_msg += Utf8ToWstring(" [Официальный репозиторий]");
-                    }
-                    SetWindowTextW(hStatusText, status_msg.c_str());
-                } else {
-                    std::string error_msg = "Статус: Ошибка обновления базы";
-                    if (last_http_code > 0) {
-                        error_msg += ": HTTP " + std::to_string(last_http_code);
-                    } else {
-                        error_msg += ": Ошибка подключения";
-                    }
-                    SetWindowTextW(hStatusText, Utf8ToWstring(error_msg).c_str());
+                for (size_t i = 0; i < categories.size(); i++) {
+                    tabStrings.push_back(categories[i]);
+                    tie.pszText = (LPWSTR)tabStrings[i].c_str();
+                    SendMessageW(hTab, TCM_INSERTITEMW, i, (LPARAM)&tie);
                 }
 
-                EnableWindow(hButtonUpdate, TRUE);
+                UpdateListBox();
+
+                std::wstring status_msg;
+                if (result == 1) {
+                    status_msg = Utf8ToWstring("Статус: База успешно загружена.");
+                } else {
+                    status_msg = Utf8ToWstring("Статус: Используется локальная база данных.");
+                }
+
+                if (IsOfficialRepository()) {
+                    status_msg += Utf8ToWstring(" [Официальный репозиторий]");
+                }
+                SetWindowTextW(hStatusText, status_msg.c_str());
+            } else {
+                // Ошибка загрузки
+                std::string error_msg = "Статус: Ошибка сети";
+                if (last_http_code > 0) {
+                    error_msg += ": HTTP " + std::to_string(last_http_code);
+                } else {
+                    error_msg += ": Ошибка подключения";
+                }
+                error_msg += ". Локальная база не найдена.";
+                SetWindowTextW(hStatusText, Utf8ToWstring(error_msg).c_str());
             }
+            break;
+        }
+        case WM_USER + 2: {
+            // Сообщение от UpdateDatabaseThread
+            int result = (int)wp;
+
+            if (result == 1) {
+                // Успешное обновление
+                TabCtrl_DeleteAllItems(hTab);
+                tabStrings.clear();
+
+                TCITEMW tie;
+                tie.mask = TCIF_TEXT;
+
+                for (size_t i = 0; i < categories.size(); i++) {
+                    tabStrings.push_back(categories[i]);
+                    tie.pszText = (LPWSTR)tabStrings[i].c_str();
+                    SendMessageW(hTab, TCM_INSERTITEMW, i, (LPARAM)&tie);
+                }
+
+                UpdateListBox();
+
+                // Пересоздаём информационное окно для сохранения стиля
+                DestroyWindow(hInfoBox);
+                hInfoBox = CreateWindowW(L"STATIC", Utf8ToWstring("Выберите программу из списка...").c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER,
+                                        275, 45, 240, 200, hwnd, NULL, NULL, NULL);
+                SendMessageW(hInfoBox, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
+                EnableWindow(hButtonInstall, FALSE);
+
+                std::wstring status_msg = Utf8ToWstring("Статус: База успешно обновлена.");
+                if (IsOfficialRepository()) {
+                    status_msg += Utf8ToWstring(" [Официальный репозиторий]");
+                }
+                SetWindowTextW(hStatusText, status_msg.c_str());
+            } else {
+                // Ошибка обновления
+                std::string error_msg = "Статус: Ошибка обновления базы";
+                if (last_http_code > 0) {
+                    error_msg += ": HTTP " + std::to_string(last_http_code);
+                } else {
+                    error_msg += ": Ошибка подключения";
+                }
+                SetWindowTextW(hStatusText, Utf8ToWstring(error_msg).c_str());
+            }
+
+            EnableWindow(hButtonUpdate, TRUE);
             break;
         }
         case WM_CTLCOLORSTATIC: {
