@@ -41,7 +41,10 @@ const std::string official_repo = "https://raw.githubusercontent.com/nez3r/Legac
 long last_http_code = 0; // Для хранения последнего HTTP кода
 
 // Оставляем вектор пустым. Он заполнится сам из apps.ini!
-std::vector<std::wstring> categories; 
+std::vector<std::wstring> categories;
+
+// Флаги для отслеживания выполнения операций
+bool isUpdatingDatabase = false; 
 
 std::wstring Utf8ToWstring(const std::string& str) {
     if (str.empty()) return L"";
@@ -308,6 +311,7 @@ DWORD WINAPI UpdateDatabaseThread(LPVOID lpParam) {
         PostMessageW(hwnd, WM_USER + 2, 0, 0); // 0 = ошибка
     }
 
+    isUpdatingDatabase = false; // Сбрасываем флаг
     return 0;
 }
 
@@ -511,6 +515,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (LOWORD(wp) == 4) {
                 // Кнопка "Обновить базу"
+                // Проверяем, не выполняется ли уже обновление
+                if (isUpdatingDatabase) {
+                    break; // Игнорируем повторные нажатия
+                }
+
+                isUpdatingDatabase = true;
                 SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Обновление базы данных...").c_str());
                 EnableWindow(hButtonUpdate, FALSE);
 
