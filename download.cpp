@@ -93,35 +93,13 @@ bool DownloadFileCurl(const std::string& url, const std::string& output_path) {
     return false;
 }
 
-// libcurl.dll реализация для Windows Vista+ (через системный curl)
-bool DownloadFileLibCurl(const std::string& url, const std::string& output_path) {
-    // На Vista+ используем системный curl с libcurl.dll
-    std::string cmd = "curl.exe -k -L --max-time 300 -o \"" + output_path + "\" \"" + url + "\" 2>nul";
-    int result = system(cmd.c_str());
-
-    // Проверяем, что файл создан и не пустой
-    std::ifstream test(output_path.c_str(), std::ios::binary | std::ios::ate);
-    if (test.good()) {
-        std::streamsize size = test.tellg();
-        test.close();
-        return (result == 0 && size > 0);
-    }
-
-    return false;
-}
-
 // Универсальная функция - автоматически выбирает метод в зависимости от версии Windows
 bool DownloadFile(const std::string& url, const std::string& output_path) {
     if (IsWindowsXP()) {
         // Windows XP: используем curl.exe (старая версия без libcurl.dll)
         return DownloadFileCurl(url, output_path);
     } else {
-        // Windows Vista+: используем libcurl.dll через системный curl
-        // Сначала пробуем libcurl
-        if (DownloadFileLibCurl(url, output_path)) {
-            return true;
-        }
-        // Fallback на WinINet если libcurl не доступен
+        // Windows Vista+: используем WinINet API (встроенный, надежный)
         return DownloadFileWinINet(url, output_path);
     }
 }
