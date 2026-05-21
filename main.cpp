@@ -9,6 +9,8 @@
 #include <sstream>
 #include <string>
 
+#include "download.h"
+
 #define ID_MENU_CHANGE_REPO 5001
 #define ID_EDIT_REPO 5002
 #define ID_BTN_OK 5003
@@ -58,33 +60,22 @@ std::string WstringToAnsi(const std::wstring& wstr) {
 }
 
 bool DownloadDatabase() {
-    // Используем curl.exe вместо libcurl
-    std::string cmd = "curl.exe -k -L --max-time 10 -o \"" + std::string(ini_filename) + "\" \"" + repository_url + "\" 2>nul";
-
     // Показываем прогресс-бар
     if (hProgressBar) {
         ShowWindow(hProgressBar, SW_SHOW);
-        SendMessageW(hProgressBar, PBM_SETPOS, 50, 0); // Показываем 50% во время загрузки
+        SendMessageW(hProgressBar, PBM_SETPOS, 50, 0);
     }
 
-    int result = system(cmd.c_str());
+    // Используем универсальную функцию загрузки
+    bool result = DownloadFile(repository_url, ini_filename);
 
     // Скрываем прогресс-бар
     if (hProgressBar) {
         ShowWindow(hProgressBar, SW_HIDE);
     }
 
-    // Проверяем, что файл создан и не пустой
-    std::ifstream test(ini_filename, std::ios::binary | std::ios::ate);
-    if (test.good()) {
-        std::streamsize size = test.tellg();
-        test.close();
-        last_http_code = (result == 0 && size > 0) ? 200 : 0;
-        return (result == 0 && size > 0);
-    }
-
-    last_http_code = 0;
-    return false;
+    last_http_code = result ? 200 : 0;
+    return result;
 }
 
 bool LoadLocalDatabase() {
@@ -308,19 +299,18 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
     GetTempPathW(MAX_PATH, temp_path);
     std::wstring local_path = std::wstring(temp_path) + filename;
 
-    // Конвертируем путь в ANSI для curl
+    // Конвертируем путь в ANSI для универсальной функции загрузки
     std::string local_path_ansi = WstringToAnsi(local_path);
 
-    // Используем curl.exe для загрузки
-    std::string cmd = "curl.exe -k -L --max-time 300 -o \"" + local_path_ansi + "\" \"" + url_ansi + "\" 2>nul";
-    int result = system(cmd.c_str());
+    // Используем универсальную функцию загрузки
+    bool result = DownloadFile(url_ansi, local_path_ansi);
 
     // Скрываем прогресс-бар
     if (hProgressBar) {
         ShowWindow(hProgressBar, SW_HIDE);
     }
 
-    if (result == 0) {
+    if (result) {
         SetWindowTextW(hStatusText, Utf8ToWstring("Статус: Запуск установки...").c_str());
 
         // Запускаем установщик и получаем информацию о процессе
