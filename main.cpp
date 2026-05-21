@@ -229,11 +229,14 @@ void ParseDatabase() {
     bool hasApp = false;
     bool inCategoriesSection = false;
 
-    while (std::getline(file, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
+while (std::getline(file, line)) {
+        // ЗАМЕНА: Безопасное удаление \r и проверка конца секции без использования back() и pop_back()
+        if (!line.empty() && line[line.length() - 1] == '\r') {
+            line.resize(line.length() - 1);
+        }
         if (line.empty() || line[0] == ';') continue;
 
-        if (line[0] == '[' && line.back() == ']') {
+        if (line[0] == '[' && line[line.length() - 1] == ']') {
             std::string sectionName = line.substr(1, line.length() - 2);
             
             if (sectionName == "categories") {
@@ -396,7 +399,8 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
 
         if (ShellExecuteExW(&sei)) {
             // Создаём окно "Установка запущена"
-            HWND hInstallDialog = CreateWindowExW(WS_EX_TOPMOST | WS_EX_DLGMODALFRAME,
+			// ЗАМЕНА: Убран WS_EX_TOPMOST, чтобы окно не лезло поверх установщика
+            HWND hInstallDialog = CreateWindowExW(WS_EX_DLGMODALFRAME,
                 L"STATIC", Utf8ToWstring("Установка запущена").c_str(),
                 WS_POPUP | WS_CAPTION | WS_VISIBLE,
                 (GetSystemMetrics(SM_CXSCREEN) - 300) / 2,
@@ -591,11 +595,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     status_msg += Utf8ToWstring(" [Официальный репозиторий]");
                 }
                 SetWindowTextW(hStatusText, status_msg.c_str());
-            } else {
+				} else {
                 // Ошибка загрузки
                 std::string error_msg = "Статус: Ошибка сети";
                 if (last_http_code > 0) {
-                    error_msg += ": HTTP " + std::to_string(last_http_code);
+                    // ЗАМЕНА: Вместо std::to_string используем старый добрый sprintf
+                    char code_buf[16];
+                    sprintf(code_buf, "%ld", last_http_code);
+                    error_msg += ": HTTP ";
+                    error_msg += code_buf;
                 } else {
                     error_msg += ": Ошибка подключения";
                 }
@@ -604,7 +612,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             break;
         }
-        case WM_USER + 2: {
+		case WM_USER + 2: {
             // Сообщение от UpdateDatabaseThread
             int result = (int)wp;
 
@@ -624,16 +632,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
                 UpdateListBox();
 
-                // Пересоздаём информационное окно для сохранения стиля
-                DestroyWindow(hInfoBox);
-                hInfoBox = CreateWindowW(L"STATIC", Utf8ToWstring("Выберите программу из списка...").c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER,
-                                        275, 45, 240, 200, hwnd, NULL, NULL, NULL);
-                SendMessageW(hInfoBox, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
+                // ЗАМЕНА: Вместо удаления и пересоздания окна hInfoBox, просто обновляем его текст!
+                // Это предотвратит баг с исчезновением кнопки "Обновить базу" под ним.
+                SetWindowTextW(hInfoBox, Utf8ToWstring("Выберите программу из списка...").c_str());
                 EnableWindow(hButtonInstall, FALSE);
 
-                // Принудительно обновляем видимость кнопок
-                ShowWindow(hButtonInstall, SW_SHOW);
-                ShowWindow(hButtonUpdate, SW_SHOW);
+                // Корректно перерисовываем интерфейс
                 InvalidateRect(hwnd, NULL, TRUE);
 
                 std::wstring status_msg;
@@ -651,7 +655,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 // Ошибка обновления
                 std::string error_msg = "Статус: Ошибка обновления базы";
                 if (last_http_code > 0) {
-                    error_msg += ": HTTP " + std::to_string(last_http_code);
+                    char code_buf[16];
+                    sprintf(code_buf, "%ld", last_http_code);
+                    error_msg += ": HTTP ";
+                    error_msg += code_buf;
                 } else {
                     error_msg += ": Ошибка подключения";
                 }

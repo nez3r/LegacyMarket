@@ -3,7 +3,7 @@
 #include <wininet.h>
 #include <fstream>
 #include <iostream>
-
+#include <vector>  // <-- ДОБАВЬТЕ ЭТУ СТРОКУ
 // Проверка версии Windows
 bool IsWindowsXP() {
     OSVERSIONINFOA osvi;
@@ -91,25 +91,63 @@ bool DownloadFileWinINet(const std::string& url, const std::string& output_path,
     return success;
 }
 
-// cURL реализация через curl.exe (для Windows XP используется старая версия)
+// cURL реализация через curl.exe — БЕЗ отображения окна консоли
 bool DownloadFileCurl(const std::string& url, const std::string& output_path, ProgressCallback callback, HWND hwnd) {
-    // Примечание: curl.exe не поддерживает callback прогресса напрямую
-    // Для XP просто выполняем загрузку без детального прогресса
-    std::string cmd = "curl.exe -k -L --max-time 300 -o \"" + output_path + "\" \"" + url + "\" 2>nul";
-    int result = system(cmd.c_str());
+    // Формируем аргументы командной строки (без вызова командного интерпретатора напрямую)
+    // -k (игнорировать сертификаты), -L (следовать редиректам), -s (silent режим, чтобы не слал мусор в никуда)
+    std::string cmd = "curl.exe -k -L -s --max-time 300 -o \"" + output_path + "\" \"" + url + "\"";
+    
+    // CreateProcess требует модифицируемую строку, поэтому копируем её в буфер
+    std::vector<char> cmd_buffer(cmd.begin(), cmd.end());
+    cmd_buffer.push_back('\0');
 
-    // Проверяем, что файл создан и не пустой
-    std::ifstream test(output_path.c_str(), std::ios::binary | std::ios::ate);
-    if (test.good()) {
-        std::streamsize size = test.tellg();
-        test.close();
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
 
-        // Вызываем callback с финальным размером
-        if (callback && hwnd && size > 0) {
-            callback(size, size, hwnd);
+    // Настройка скрытого запуска:
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE; // Явно просим скрыть окно, если оно создастся
+
+    // Запускаем процесс curl.exe с важным флагом CREATE_NO_WINDOW
+    if (CreateProcessA(
+        NULL,               // Имя модуля (используем командную строку)
+        &cmd_buffer[0],     // Командная строка
+        NULL,               // Атрибуты безопасности процесса
+        NULL,               // Атрибуты безопасности потока
+        FALSE,              // Наследование дескрипторов
+        CREATE_NO_WINDOW,   // Мheader ФЛАГ: запускает консольное приложение без создания окна!
+        NULL,               // Окружение
+        NULL,               // Текущий каталог
+        &si,                // Предопределенные настройки стартового окна
+        &pi                 // Информация о созданном процессе
+    )) {
+        // Ждем, пока curl закончит скачивание (максимум 5 минут, как в вашем таймауте)
+        WaitForSingleObject(pi.hProcess, 300000);
+
+        // Получаем код возврата процесса
+        DWORD exit_code = 1;
+        GetExitCodeProcess(pi.hProcess, &exit_code);
+
+        // Закрываем дескрипторы процесса и потока
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+
+        // Проверяем, что файл создан и не пустой
+        std::ifstream test(output_path.c_str(), std::ios::binary | std::ios::ate);
+        if (test.good()) {
+            std::streamsize size = test.tellg();
+            test.close();
+
+            // Вызываем callback с финальным размером для UI
+            if (callback && hwnd && size > 0) {
+                callback(size, size, hwnd);
+            }
+
+            return (exit_code == 0 && size > 0);
         }
-
-        return (result == 0 && size > 0);
     }
 
     return false;
