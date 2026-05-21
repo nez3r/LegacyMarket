@@ -63,30 +63,11 @@ std::wstring FormatSize(size_t bytes) {
 
 // Callback функция для обновления прогресса загрузки
 void UpdateDownloadProgress(size_t downloaded, size_t total, HWND hwnd) {
-    if (!hProgressBar || !hStatusText) return;
+    if (!hwnd) return;
 
-    // Вычисляем процент
-    int percent = 0;
-    if (total > 0) {
-        percent = (int)((downloaded * 100) / total);
-    }
-
-    // Обновляем прогресс-бар
-    SendMessageW(hProgressBar, PBM_SETPOS, percent, 0);
-
-    // Обновляем текст статуса
-    std::wstring downloadedStr = FormatSize(downloaded);
-    std::wstring totalStr = FormatSize(total);
-
-    wchar_t statusBuffer[256];
-    if (total > 0) {
-        swprintf(statusBuffer, 256, L"Статус: Загрузка... %d%% (%s / %s)",
-                 percent, downloadedStr.c_str(), totalStr.c_str());
-    } else {
-        swprintf(statusBuffer, 256, L"Статус: Загрузка... (%s)", downloadedStr.c_str());
-    }
-
-    SetWindowTextW(hStatusText, statusBuffer);
+    // Отправляем сообщение в главный поток для обновления UI
+    // wParam = downloaded, lParam = total
+    PostMessageW(hwnd, WM_USER + 3, (WPARAM)downloaded, (LPARAM)total);
 } 
 
 std::wstring Utf8ToWstring(const std::string& str) {
@@ -672,6 +653,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
 
             EnableWindow(hButtonUpdate, TRUE);
+            break;
+        }
+        case WM_USER + 3: {
+            // Сообщение для обновления прогресса загрузки
+            size_t downloaded = (size_t)wp;
+            size_t total = (size_t)lp;
+
+            if (!hProgressBar || !hStatusText) break;
+
+            // Вычисляем процент
+            int percent = 0;
+            if (total > 0) {
+                percent = (int)((downloaded * 100) / total);
+            }
+
+            // Обновляем прогресс-бар
+            SendMessageW(hProgressBar, PBM_SETPOS, percent, 0);
+
+            // Обновляем текст статуса
+            std::wstring downloadedStr = FormatSize(downloaded);
+            std::wstring totalStr = FormatSize(total);
+
+            wchar_t statusBuffer[256];
+            if (total > 0) {
+                swprintf(statusBuffer, 256, L"Статус: Загрузка... %d%% (%s / %s)",
+                         percent, downloadedStr.c_str(), totalStr.c_str());
+            } else {
+                swprintf(statusBuffer, 256, L"Статус: Загрузка... (%s)", downloadedStr.c_str());
+            }
+
+            SetWindowTextW(hStatusText, statusBuffer);
             break;
         }
         case WM_CTLCOLORSTATIC: {
