@@ -44,7 +44,50 @@ long last_http_code = 0; // Для хранения последнего HTTP к
 std::vector<std::wstring> categories;
 
 // Флаги для отслеживания выполнения операций
-bool isUpdatingDatabase = false; 
+bool isUpdatingDatabase = false;
+
+// Функция для форматирования размера файла
+std::wstring FormatSize(size_t bytes) {
+    wchar_t buffer[64];
+    if (bytes < 1024) {
+        swprintf(buffer, 64, L"%zu Б", bytes);
+    } else if (bytes < 1024 * 1024) {
+        swprintf(buffer, 64, L"%.2f КБ", bytes / 1024.0);
+    } else if (bytes < 1024 * 1024 * 1024) {
+        swprintf(buffer, 64, L"%.2f МБ", bytes / (1024.0 * 1024.0));
+    } else {
+        swprintf(buffer, 64, L"%.2f ГБ", bytes / (1024.0 * 1024.0 * 1024.0));
+    }
+    return std::wstring(buffer);
+}
+
+// Callback функция для обновления прогресса загрузки
+void UpdateDownloadProgress(size_t downloaded, size_t total, HWND hwnd) {
+    if (!hProgressBar || !hStatusText) return;
+
+    // Вычисляем процент
+    int percent = 0;
+    if (total > 0) {
+        percent = (int)((downloaded * 100) / total);
+    }
+
+    // Обновляем прогресс-бар
+    SendMessageW(hProgressBar, PBM_SETPOS, percent, 0);
+
+    // Обновляем текст статуса
+    std::wstring downloadedStr = FormatSize(downloaded);
+    std::wstring totalStr = FormatSize(total);
+
+    wchar_t statusBuffer[256];
+    if (total > 0) {
+        swprintf(statusBuffer, 256, L"Статус: Загрузка... %d%% (%s / %s)",
+                 percent, downloadedStr.c_str(), totalStr.c_str());
+    } else {
+        swprintf(statusBuffer, 256, L"Статус: Загрузка... (%s)", downloadedStr.c_str());
+    }
+
+    SetWindowTextW(hStatusText, statusBuffer);
+} 
 
 std::wstring Utf8ToWstring(const std::string& str) {
     if (str.empty()) return L"";
@@ -66,11 +109,11 @@ bool DownloadDatabase() {
     // Показываем прогресс-бар
     if (hProgressBar) {
         ShowWindow(hProgressBar, SW_SHOW);
-        SendMessageW(hProgressBar, PBM_SETPOS, 50, 0);
+        SendMessageW(hProgressBar, PBM_SETPOS, 0, 0);
     }
 
-    // Используем универсальную функцию загрузки
-    bool result = DownloadFile(repository_url, ini_filename);
+    // Используем универсальную функцию загрузки с callback
+    bool result = DownloadFile(repository_url, ini_filename, UpdateDownloadProgress, hMainWindow);
 
     // Скрываем прогресс-бар
     if (hProgressBar) {
@@ -327,7 +370,7 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
     // Показываем прогресс-бар для скачивания
     if (hProgressBar) {
         ShowWindow(hProgressBar, SW_SHOW);
-        SendMessageW(hProgressBar, PBM_SETPOS, 50, 0);
+        SendMessageW(hProgressBar, PBM_SETPOS, 0, 0);
     }
 
     std::string url_ansi = WstringToAnsi(app.url);
@@ -344,8 +387,8 @@ DWORD WINAPI DownloadAndInstallThread(LPVOID lpParam) {
     // Конвертируем путь в ANSI для универсальной функции загрузки
     std::string local_path_ansi = WstringToAnsi(local_path);
 
-    // Используем универсальную функцию загрузки
-    bool result = DownloadFile(url_ansi, local_path_ansi);
+    // Используем универсальную функцию загрузки с callback
+    bool result = DownloadFile(url_ansi, local_path_ansi, UpdateDownloadProgress, hMainWindow);
 
     // Скрываем прогресс-бар
     if (hProgressBar) {

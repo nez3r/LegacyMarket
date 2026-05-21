@@ -19,7 +19,7 @@ bool IsWindowsXP() {
 }
 
 // WinINet реализация для Windows XP
-bool DownloadFileWinINet(const std::string& url, const std::string& output_path) {
+bool DownloadFileWinINet(const std::string& url, const std::string& output_path, ProgressCallback callback, HWND hwnd) {
     // 1. Инициализация сессии
     HINTERNET hInternet = InternetOpenA(
         "LegacyMarket/1.0",
@@ -48,6 +48,12 @@ bool DownloadFileWinINet(const std::string& url, const std::string& output_path)
         return false;
     }
 
+    // Получаем размер файла
+    DWORD totalSize = 0;
+    DWORD bufferSize = sizeof(totalSize);
+    DWORD index = 0;
+    HttpQueryInfoA(hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &totalSize, &bufferSize, &index);
+
     // 3. Создание локального файла
     std::ofstream outFile(output_path.c_str(), std::ios::binary);
     if (!outFile.is_open()) {
@@ -56,9 +62,10 @@ bool DownloadFileWinINet(const std::string& url, const std::string& output_path)
         return false;
     }
 
-    // 4. Потоковое скачивание данных
+    // 4. Потоковое скачивание данных с отслеживанием прогресса
     char buffer[8192];
     DWORD bytesRead = 0;
+    size_t totalDownloaded = 0;
     bool success = true;
 
     while (InternetReadFile(hUrl, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
@@ -66,6 +73,13 @@ bool DownloadFileWinINet(const std::string& url, const std::string& output_path)
         if (outFile.fail()) {
             success = false;
             break;
+        }
+
+        totalDownloaded += bytesRead;
+
+        // Вызываем callback для обновления прогресса
+        if (callback && hwnd) {
+            callback(totalDownloaded, totalSize, hwnd);
         }
     }
 
@@ -78,7 +92,9 @@ bool DownloadFileWinINet(const std::string& url, const std::string& output_path)
 }
 
 // cURL реализация через curl.exe (для Windows XP используется старая версия)
-bool DownloadFileCurl(const std::string& url, const std::string& output_path) {
+bool DownloadFileCurl(const std::string& url, const std::string& output_path, ProgressCallback callback, HWND hwnd) {
+    // Примечание: curl.exe не поддерживает callback прогресса напрямую
+    // Для XP просто выполняем загрузку без детального прогресса
     std::string cmd = "curl.exe -k -L --max-time 300 -o \"" + output_path + "\" \"" + url + "\" 2>nul";
     int result = system(cmd.c_str());
 
@@ -87,6 +103,12 @@ bool DownloadFileCurl(const std::string& url, const std::string& output_path) {
     if (test.good()) {
         std::streamsize size = test.tellg();
         test.close();
+
+        // Вызываем callback с финальным размером
+        if (callback && hwnd && size > 0) {
+            callback(size, size, hwnd);
+        }
+
         return (result == 0 && size > 0);
     }
 
@@ -94,12 +116,12 @@ bool DownloadFileCurl(const std::string& url, const std::string& output_path) {
 }
 
 // Универсальная функция - автоматически выбирает метод в зависимости от версии Windows
-bool DownloadFile(const std::string& url, const std::string& output_path) {
+bool DownloadFile(const std::string& url, const std::string& output_path, ProgressCallback callback, HWND hwnd) {
     if (IsWindowsXP()) {
         // Windows XP: используем curl.exe (старая версия без libcurl.dll)
-        return DownloadFileCurl(url, output_path);
+        return DownloadFileCurl(url, output_path, callback, hwnd);
     } else {
         // Windows Vista+: используем WinINet API (встроенный, надежный)
-        return DownloadFileWinINet(url, output_path);
+        return DownloadFileWinINet(url, output_path, callback, hwnd);
     }
 }
