@@ -46,6 +46,10 @@ std::vector<std::wstring> categories;
 // Флаги для отслеживания выполнения операций
 bool isUpdatingDatabase = false;
 
+// Глобальные переменные для прогресса загрузки
+size_t g_downloaded = 0;
+size_t g_total = 0;
+
 // Функция для форматирования размера файла
 std::wstring FormatSize(size_t bytes) {
     wchar_t buffer[64];
@@ -65,9 +69,12 @@ std::wstring FormatSize(size_t bytes) {
 void UpdateDownloadProgress(size_t downloaded, size_t total, HWND hwnd) {
     if (!hwnd) return;
 
-    // Отправляем сообщение в главный поток для обновления UI
-    // wParam = downloaded, lParam = total
-    PostMessageW(hwnd, WM_USER + 3, (WPARAM)downloaded, (LPARAM)total);
+    // Сохраняем значения в глобальные переменные
+    g_downloaded = downloaded;
+    g_total = total;
+
+    // Отправляем сигнал в главный поток для обновления UI
+    PostMessageW(hwnd, WM_USER + 3, 0, 0);
 } 
 
 std::wstring Utf8ToWstring(const std::string& str) {
@@ -657,8 +664,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_USER + 3: {
             // Сообщение для обновления прогресса загрузки
-            size_t downloaded = (size_t)wp;
-            size_t total = (size_t)lp;
+            size_t downloaded = g_downloaded;
+            size_t total = g_total;
 
             if (!hProgressBar || !hStatusText) break;
 
