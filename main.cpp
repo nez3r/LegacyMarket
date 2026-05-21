@@ -643,6 +643,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 SendMessageW(hInfoBox, WM_SETFONT, (WPARAM)hCustomFont, TRUE);
                 EnableWindow(hButtonInstall, FALSE);
 
+                // Принудительно обновляем видимость кнопок
+                ShowWindow(hButtonInstall, SW_SHOW);
+                ShowWindow(hButtonUpdate, SW_SHOW);
+                InvalidateRect(hwnd, NULL, TRUE);
+
                 std::wstring status_msg;
                 if (result == 1) {
                     status_msg = Utf8ToWstring("Статус: База успешно обновлена.");
